@@ -1,0 +1,353 @@
+
+version: "3.8"
+
+services:
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+    user: "0"
+    command: >
+      bash -c '
+        if [ x${ELASTIC_PASSWORD} == x ]; then
+          echo "Set the ELASTIC_PASSWORD environment variable in the .env file";
+          exit 1;
+        elif [ x${KIBANA_PASSWORD} == x ]; then
+          echo "Set the KIBANA_PASSWORD environment variable in the .env file";
+          exit 1;
+        fi;
+        if [ ! -f config/certs/ca.zip ]; then
+          echo "Creating CA";
+          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+          unzip config/certs/ca.zip -d config/certs;
+        fi;
+        if [ ! -f config/certs/certs.zip ]; then
+          echo "Creating certs";
+          echo -ne \
+          "instances:\n"\
+          "  - name: es01\n"\
+          "    dns:\n"\
+          "      - es01\n"\
+          "      - localhost\n"\
+          "    ip:\n"\
+          "      - 127.0.0.1\n"\
+          "  - name: es02\n"\
+          "    dns:\n"\
+          "      - es02\n"\
+          "      - localhost\n"\
+          "    ip:\n"\
+          "      - 127.0.0.1\n"\
+          "  - name: es03\n"\
+          "    dns:\n"\
+          "      - es03\n"\
+          "      - localhost\n"\
+          "    ip:\n"\
+          "      - 127.0.0.1\n"\
+          > config/certs/instances.yml;
+          bin/elasticsearch-certutil cert --silent --pem -out config/certs/certs.zip --in config/certs/instances.yml --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key;
+          unzip config/certs/certs.zip -d config/certs;
+        fi;
+        echo "Setting file permissions"
+        chown -R root:root config/certs;
+        find . -type d -exec chmod 750 \{\} \;;
+        find . -type f -exec chmod 640 \{\} \;;
+        echo "Waiting for Elasticsearch availability";
+        until curl -s http://es01:9200 | grep -q "missing authentication credentials"; do sleep 30; done;
+        echo "Setting kibana_system password";
+        until curl -s -X POST -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" http://es01:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 10; done;
+        echo "All done!";
+      '
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f config/certs/es01/es01.crt ]"]
+      interval: 1s
+      timeout: 5s
+      retries: 120
+
+  apm-server:
+    image: docker.elastic.co/apm/apm-server:${STACK_VERSION}
+    ports:
+      - "8200:8200"
+    command: >
+      apm-server -e
+         -E output.elasticsearch.hosts=["es01:9200"]
+         -E output.elasticsearch.protocol=http
+         -E output.elasticsearch.username=elastic
+         -E output.elasticsearch.password=${ELASTIC_PASSWORD}
+         -E apm-server.data_streams.wait_for_integration=false    
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    logging:
+      driver: 'json-file'
+      options:
+          max-size: '2m'
+          max-file: '5'
+    depends_on:
+      es01:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--write-out", "'HTTP %{http_code}'", "--silent", "--output", "/dev/null", "http://localhost:8200/healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  apm-setup:
+    image: curlimages/curl:latest
+    depends_on:
+      kibana:
+        condition: service_healthy
+      apm-server:
+        condition: service_started
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - STACK_VERSION=${STACK_VERSION}
+      - KIBANA_SERVICE_NAME=${KIBANA_SERVICE_NAME:-kibana}
+      - KIBANA_PORT=${KIBANA_PORT:-5601}
+      - APM_SERVER_HOST=${APM_SERVER_HOST:-0.0.0.0}
+      - APM_SERVER_PORT=${APM_SERVER_PORT:-8200}
+      - APM_SERVER_SERVICE_NAME=${APM_SERVER_SERVICE_NAME:-apm-server}
+      - APM_POLICY_NAME=${APM_POLICY_NAME:-APM Server policy}
+      - APM_POLICY_DESCRIPTION=${APM_POLICY_DESCRIPTION:-Policy for APM Server}
+      - APM_NAMESPACE=${APM_NAMESPACE:-default}
+      - APM_INTEGRATION_NAME=${APM_INTEGRATION_NAME:-apm-integration}
+      - APM_INTEGRATION_DESCRIPTION=${APM_INTEGRATION_DESCRIPTION:-APM integration for server}
+      - APM_SETUP_WAIT_INTERVAL=${APM_SETUP_WAIT_INTERVAL:-10}
+    command: >
+      sh -c '
+        echo "Waiting for Kibana to be ready for API calls...";
+        until curl -s -u "elastic:${ELASTIC_PASSWORD}" "http://${KIBANA_SERVICE_NAME:-kibana}:${KIBANA_PORT:-5601}/api/status" | grep -q "All services are available"; do
+          echo "Kibana not ready yet, waiting...";
+          sleep ${APM_SETUP_WAIT_INTERVAL:-10};
+        done;
+        echo "Kibana is ready, setting up Fleet...";
+        
+        echo "Setting up Fleet server...";
+        curl -X POST -u "elastic:${ELASTIC_PASSWORD}" \
+          -H "Content-Type: application/json" \
+          -H "kbn-xsrf: true" \
+          "http://${KIBANA_SERVICE_NAME:-kibana}:${KIBANA_PORT:-5601}/api/fleet/setup" \
+          -d "{\"forceRecreate\": false}" || true;
+        
+        sleep ${APM_SETUP_WAIT_INTERVAL:-10};
+        
+        echo "Installing APM integration...";
+        curl -X POST -u "elastic:${ELASTIC_PASSWORD}" \
+          -H "Content-Type: application/json" \
+          -H "kbn-xsrf: true" \
+          "http://${KIBANA_SERVICE_NAME:-kibana}:${KIBANA_PORT:-5601}/api/fleet/epm/packages/apm/${STACK_VERSION}" \
+          -d "{\"force\": true}" || true;
+        
+        sleep ${APM_SETUP_WAIT_INTERVAL:-10};
+        
+        echo "Creating APM agent policy...";
+        POLICY_RESPONSE=$(curl -X POST -u "elastic:${ELASTIC_PASSWORD}" \
+          -H "Content-Type: application/json" \
+          -H "kbn-xsrf: true" \
+          "http://${KIBANA_SERVICE_NAME:-kibana}:${KIBANA_PORT:-5601}/api/fleet/agent_policies" \
+          -d "{
+            \"name\": \"${APM_POLICY_NAME:-APM Server policy}\",
+            \"description\": \"${APM_POLICY_DESCRIPTION:-Policy for APM Server}\",
+            \"namespace\": \"${APM_NAMESPACE:-default}\",
+            \"monitoring_enabled\": [\"logs\", \"metrics\"]
+          }");
+        
+        POLICY_ID=$(echo "$POLICY_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4);
+        
+        echo "Policy ID: $POLICY_ID";
+        
+        if [ -n "$POLICY_ID" ]; then
+          echo "Adding APM integration to policy...";
+          curl -X POST -u "elastic:${ELASTIC_PASSWORD}" \
+            -H "Content-Type: application/json" \
+            -H "kbn-xsrf: true" \
+            "http://${KIBANA_SERVICE_NAME:-kibana}:${KIBANA_PORT:-5601}/api/fleet/package_policies" \
+            -d "{
+              \"policy_id\": \"$POLICY_ID\",
+              \"package\": {
+                \"name\": \"apm\",
+                \"version\": \"${STACK_VERSION}\"
+              },
+              \"name\": \"${APM_INTEGRATION_NAME:-apm-integration}\",
+              \"description\": \"${APM_INTEGRATION_DESCRIPTION:-APM integration for server}\",
+              \"namespace\": \"${APM_NAMESPACE:-default}\",
+              \"inputs\": {
+                \"apm-apm\": {
+                  \"enabled\": true,
+                  \"streams\": {},
+                  \"vars\": {
+                    \"host\": {
+                      \"value\": \"${APM_SERVER_HOST:-0.0.0.0}:${APM_SERVER_PORT:-8200}\",
+                      \"type\": \"text\"
+                    },
+                    \"url\": {
+                      \"value\": \"http://${APM_SERVER_SERVICE_NAME:-apm-server}:${APM_SERVER_PORT:-8200}\",
+                      \"type\": \"text\"
+                    }
+                  }
+                }
+              }
+            }" || true;
+        else
+          echo "Failed to extract policy ID, but APM integration is already installed";
+        fi;
+        
+        echo "APM integration setup completed!";
+      '
+    restart: "no"
+
+  es01:
+    depends_on:
+      setup:
+        condition: service_healthy
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - esdata01:/usr/share/elasticsearch/data
+    ports:
+      - ${ES_PORT}:9200
+    environment:
+      - node.name=es01
+      - cluster.name=${CLUSTER_NAME}
+      - cluster.initial_master_nodes=es01,es02,es03
+      - discovery.seed_hosts=es02,es03
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=certs/es01/es01.key
+      - xpack.security.transport.ssl.certificate=certs/es01/es01.crt
+      - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.verification_mode=certificate
+      - xpack.license.self_generated.type=${LICENSE}
+    mem_limit: ${MEM_LIMIT}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s http://localhost:9200 | grep -q 'missing authentication credentials'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  es02:
+    depends_on:
+      - es01
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - esdata02:/usr/share/elasticsearch/data
+    environment:
+      - node.name=es02
+      - cluster.name=${CLUSTER_NAME}
+      - cluster.initial_master_nodes=es01,es02,es03
+      - discovery.seed_hosts=es01,es03
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=certs/es02/es02.key
+      - xpack.security.transport.ssl.certificate=certs/es02/es02.crt
+      - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.verification_mode=certificate
+      - xpack.license.self_generated.type=${LICENSE}
+    mem_limit: ${MEM_LIMIT}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s http://localhost:9200 | grep -q 'missing authentication credentials'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  es03:
+    depends_on:
+      - es02
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - esdata03:/usr/share/elasticsearch/data
+    environment:
+      - node.name=es03
+      - cluster.name=${CLUSTER_NAME}
+      - cluster.initial_master_nodes=es01,es02,es03
+      - discovery.seed_hosts=es01,es02
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=certs/es03/es03.key
+      - xpack.security.transport.ssl.certificate=certs/es03/es03.crt
+      - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.verification_mode=certificate
+      - xpack.license.self_generated.type=${LICENSE}
+    mem_limit: ${MEM_LIMIT}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s http://localhost:9200 | grep -q 'missing authentication credentials'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  kibana:
+    depends_on:
+      es01:
+        condition: service_healthy
+      es02:
+        condition: service_healthy
+      es03:
+        condition: service_healthy
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    volumes:
+      - kibanadata:/usr/share/kibana/data
+    ports:
+      - ${KIBANA_PORT}:5601
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=http://es01:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+    mem_limit: ${MEM_LIMIT}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -I http://localhost:5601 | grep -q 'HTTP/1.1 302 Found'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+volumes:
+  certs:
+    driver: local
+  esdata01:
+    driver: local
+  esdata02:
+    driver: local
+  esdata03:
+    driver: local
+  kibanadata:
+    driver: local 

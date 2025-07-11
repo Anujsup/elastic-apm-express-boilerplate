@@ -1,0 +1,48 @@
+{
+  "name": "express-apm-monitoring-boilerplate",
+  "version": "1.0.0",
+  "description": "A complete boilerplate for Express.js APM monitoring with Elastic Stack - ready-to-use starter template",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test": "echo \"Generate test traffic with: curl http://localhost:3000/\"",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "docker:clean": "docker-compose down -v"
+  },
+  "keywords": [
+    "express",
+    "apm",
+    "monitoring",
+    "elasticsearch",
+    "kibana",
+    "elastic-stack",
+    "nodejs",
+    "performance-monitoring",
+    "boilerplate",
+    "starter-template",
+    "observability"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-username/express-apm-monitoring-boilerplate.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/express-apm-monitoring-boilerplate/issues"
+  },
+  "homepage": "https://github.com/your-username/express-apm-monitoring-boilerplate#readme",
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "dependencies": {
+    "elastic-apm-node": "^4.13.0",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {},
+  "peerDependencies": {}
+}
