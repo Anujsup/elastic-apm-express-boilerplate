@@ -25,16 +25,16 @@
     "starter-template",
     "observability"
   ],
-  "author": "Your Name",
+  "author": "Anuj Patil",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/your-username/express-apm-monitoring-boilerplate.git"
+    "url": "git+https://github.com/Anujsup/elastic-apm-express-boilerplate.git"
   },
   "bugs": {
-    "url": "https://github.com/your-username/express-apm-monitoring-boilerplate/issues"
+    "url": "https://github.com/Anujsup/elastic-apm-express-boilerplate/issues"
   },
-  "homepage": "https://github.com/your-username/express-apm-monitoring-boilerplate#readme",
+  "homepage": "https://github.com/Anujsup/elastic-apm-express-boilerplate#readme",
   "engines": {
     "node": ">=16.0.0",
     "npm": ">=8.0.0"
@@ -42,7 +42,5 @@
   "dependencies": {
     "elastic-apm-node": "^4.13.0",
     "express": "^5.1.0"
-  },
-  "devDependencies": {},
-  "peerDependencies": {}
+  }
 }
