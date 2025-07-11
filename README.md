@@ -93,6 +93,30 @@ graph TB
 5. **Setup service** handles initial certificate generation and password configuration
 6. **Docker volumes** persist data and certificates across container restarts
 
+## 🏗️ Why 3-Node Cluster?
+
+**Could we use just 1 node?** Yes! A single Elasticsearch node would work perfectly for basic APM monitoring and development.
+
+**Why use 3 nodes then?** This boilerplate uses a 3-node cluster to provide:
+
+### **Production-Ready Architecture**
+- **High Availability**: If one node fails, the cluster continues running
+- **Fault Tolerance**: Data is replicated across nodes, preventing data loss
+- **Load Distribution**: Query and indexing load is distributed across nodes
+- **Scalability**: Easy to add more nodes as your application grows
+
+### **Realistic Development Environment**
+- **Mirror Production**: Test your APM setup in a cluster environment
+- **Performance Testing**: Understand how your monitoring performs under load
+- **Cluster Behavior**: Experience Elasticsearch cluster dynamics (master election, shard allocation, etc.)
+
+### **Node Roles**
+- **ES01**: Master-eligible node (handles cluster management) + Data node
+- **ES02**: Data node (stores and indexes APM data)
+- **ES03**: Data node (stores and indexes APM data)
+
+**💡 For Simple Development**: You can easily scale down to 1 node by removing es02 and es03 from docker-compose.yml and updating the cluster configuration.
+
 ## 📋 Prerequisites
 
 - **Docker & Docker Compose** installed
