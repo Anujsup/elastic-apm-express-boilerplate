@@ -178,7 +178,11 @@ The Express application includes 5 pre-built endpoints for testing APM monitorin
 1. Open Kibana: http://localhost:5601
 2. Login with credentials above
 3. Go to **Observability** → **APM**
-4. View your `express-apm-demo` service
+4. **Initial State**: You'll see "Welcome to Elastic Observability!" until the Express app connects
+5. **Auto-Detection**: Once your Express app runs and sends data, the welcome screen disappears (within ~1 minute)
+6. View your `express-apm-demo` service automatically
+
+> **🚀 Auto-Setup**: APM integration is pre-configured. No manual setup needed - just start the Express app and it will be detected automatically.
 
 ### What You'll See
 - **Service overview**: Response times, throughput, error rates
